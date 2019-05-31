@@ -40,10 +40,6 @@ int main(int argc, char **argv) {
     shuffle(bgpixels.begin(), bgpixels.end(), rng);
     bgpixels.resize(2000);
 
-    for (Vec3b cp : bgpixels) {
-//      cout << "A " << (int)cp[0] << " " << (int)cp[1] << endl;
-    }
-
     // k-means cluster them
     for (int n = 2; n < 3; ++n) {
         float prev_tsi = -1;
@@ -175,30 +171,30 @@ int main(int argc, char **argv) {
             cout << endl;
             // compute covariance matrix for each cluster
             for (int i = 0; i < n; ++i) {
-                Mat covariance(2, 2, CV_32F, 0.0); // XXX let's do 2d for now
+                Mat covariance(3, 3, CV_32F, 0.0);
                 for (int a = 0; a < clusters[i].size(); ++a) {
                     Vec<float,3> pa = clusters[i][a];
                     // this is a bit stupid as the covariance matrix is
                     // symmetric, but hey, one thing at a time
-                    for (int x = 0; x < 2; x++) {
-                        for (int y = 0; y < 2; y++) {
+                    for (int x = 0; x < 3; x++) {
+                        for (int y = 0; y < 3; y++) {
                             covariance.at<float>(y, x) += (pa[y] - centers[i][y])*(pa[x] - centers[i][x]);
                         }
                     }
                 }
-                for (int x = 0; x < 2; x++) {
-                    for (int y = 0; y < 2; y++) {
+                for (int x = 0; x < 3; x++) {
+                    for (int y = 0; y < 3; y++) {
                         covariance.at<float>(y, x) /= (clusters[i].size()-1);
                     }
                 }
                 // dump
                 cout << "covariance for cluster " << i << " [";
-                for (int x = 0; x < 2; x++) {
+                for (int x = 0; x < 3; x++) {
                     if (x) {
                         cout << ",";
                     }
                     cout << "[";
-                    for (int y = 0; y < 2; y++) {
+                    for (int y = 0; y < 3; y++) {
                         if (y) {
                             cout << ",";
                         }
@@ -242,12 +238,14 @@ int main(int argc, char **argv) {
       */      
     }
 
-    // XXX select n based on best silhouette
+    // XXX select n based on best silhouette, also select the covariances
 
     // so now we have k-means clusters, we can use them to seed EM gaussians
+    // XXX which is slightly weird, as EM isn't much more compicated than
+    // k-means, why do we not do EM right away? k-means can potentialy be much
+    // quicker, perhaps that's worth it? we could also run the EM with the full
+    // dataset, and k-means just with a fraction...
 
-
-    // towards that, get covariances for each cluster
     
 
 	return 0;
