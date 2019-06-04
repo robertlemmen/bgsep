@@ -10,6 +10,14 @@
 using namespace cv;
 using namespace std;
 
+Mat matFromVec(Vec<float,3> v) {
+    Mat ret(3, 1, CV_32F);
+    ret.at<float>(0, 0) = v[0];
+    ret.at<float>(1, 0) = v[1];
+    ret.at<float>(2, 0) = v[2];
+    return ret;
+}
+
 int main(int argc, char **argv) {
     default_random_engine rng;
     rng.seed(chrono::system_clock::now().time_since_epoch().count());
@@ -38,15 +46,17 @@ int main(int argc, char **argv) {
 
     cout << "cutting down to save time...." << endl;
     shuffle(bgpixels.begin(), bgpixels.end(), rng);
-    bgpixels.resize(2000);
+    bgpixels.resize(200);
 
     // k-means cluster them
+    vector<Vec<float,3>> centers;
+    vector<Mat> covariances;
     for (int n = 2; n < 3; ++n) {
         float prev_tsi = -1;
         vector<Vec<float,3>> prev_centers(n, {0, 0, 0});
         for (int reps = 0; reps < 1; reps++) {
             // draw n random ones as cluster centers
-            vector<Vec<float,3>> centers(n, {0, 0, 0});
+            centers = vector<Vec<float,3>>(n, {0, 0, 0});
             uniform_int_distribution<int> uni_dist(0, bgpixels.size()-1);
             centers[0] = bgpixels[uni_dist(rng)];
             cout << "initial center 0: " << centers[0] << endl;
@@ -170,6 +180,7 @@ int main(int argc, char **argv) {
             }
             cout << endl;
             // compute covariance matrix for each cluster
+            covariances = vector<Mat>(n);
             for (int i = 0; i < n; ++i) {
                 Mat covariance(3, 3, CV_32F, 0.0);
                 for (int a = 0; a < clusters[i].size(); ++a) {
@@ -188,23 +199,9 @@ int main(int argc, char **argv) {
                     }
                 }
                 // dump
-                cout << "covariance for cluster " << i << " [";
-                for (int x = 0; x < 3; x++) {
-                    if (x) {
-                        cout << ",";
-                    }
-                    cout << "[";
-                    for (int y = 0; y < 3; y++) {
-                        if (y) {
-                            cout << ",";
-                        }
-                        cout << covariance.at<float>(y, x);
-                    }
-                    cout << "]";
-                }
-                cout << "]" << endl;
-                cout << "mean for cluster " << i << " " << centers[i] << endl;
+                covariances[i] = covariance;
             }
+            /*
             // raw data per cluster
             for (int i = 0; i < n; ++i) {
                 for (int a = 0; a < clusters[i].size(); ++a) {
@@ -212,6 +209,7 @@ int main(int argc, char **argv) {
                     cout << i << " " << pa[0] << " " << pa[1] << endl;
                 }
             }
+            */
 
         }
         cout << "average silhouette for n = " << n << " is " << prev_tsi << endl;
@@ -237,15 +235,81 @@ int main(int argc, char **argv) {
         waitKey(0);
       */      
     }
+    cout << endl;
 
     // XXX select n based on best silhouette, also select the covariances
 
     // so now we have k-means clusters, we can use them to seed EM gaussians
-    // XXX which is slightly weird, as EM isn't much more compicated than
-    // k-means, why do we not do EM right away? k-means can potentialy be much
-    // quicker, perhaps that's worth it? we could also run the EM with the full
-    // dataset, and k-means just with a fraction...
+    // k-means is a special case of EM, so this looks odd. but with EM it is
+    // hard to get a full covariance matrix with few samples (too many factors)
+    // so seeding is great
+    int n = covariances.size();
+    cout << "EM algorithm with " << n << " clusters" << endl;
+    bool converged = true;
+    do {
+        cout << "-------" << endl;
+        for (int i = 0; i < n; ++i) {
+            cout << "mean for cluster " << i << " " << centers[i] << endl;
+            cout << "covariance for cluster " << i << " [";
+            for (int x = 0; x < 3; x++) {
+                if (x) {
+                    cout << ", ";
+                }
+                cout << "[";
+                for (int y = 0; y < 3; y++) {
+                    if (y) {
+                        cout << ", ";
+                    }
+                    cout << covariances[i].at<float>(y, x);
+                }
+                cout << "]";
+            }
+            cout << "]" << endl;
+        }
 
+        // determine the relative probabilities for each pixel and cluster
+        double weights[bgpixels.size()][n];
+        for (int p = 0; p < bgpixels.size(); ++p) {
+            Vec<float,3> pixel = bgpixels[p];
+            
+            double weightsum = 0.0;
+            for (int c = 0; c < n; ++c) {
+                Vec<float,3> center = centers[c];
+                Mat covariance = covariances[c];
+                Mat a =   (matFromVec(pixel) - matFromVec(center)).t() 
+                                        * covariance.inv() 
+                                        * (matFromVec(pixel) - matFromVec(center));
+                double aa = a.at<float>(0,0);
+                double af = exp(-.5 * aa);
+                double bf =  sqrt( pow(2 * M_PI, 3.0) * determinant(covariance) );
+                weights[p][c] = af / bf;
+                weightsum += weights[p][c];
+            }
+            for (int c = 0; c < n; ++c) {
+                weights[p][c] /= weightsum;
+                //cout << "pixel " << p << " at " << pixel << " attributed to center " << c << " at " << centers[c] << " with weight " << weights[p][c] << endl;
+            }
+        }
+
+        // compute the new mean
+        for (int c = 0; c < n; ++c) {
+            Vec<float,3> new_center(0.0, 0.0, 0.0);
+            double weightsum = 0.0;
+            for (int p = 0; p < bgpixels.size(); ++p) {
+                Vec<float,3> pixel = bgpixels[p];
+                pixel *= weights[p][c];
+                new_center += pixel;
+                weightsum += weights[p][c];
+            }
+            new_center /= weightsum;
+            cout << "new center " << c << ": " << new_center << endl;
+        }
+        // XXX and the new covariance
+        // XXX determine drift length of center, if the total drift of all
+        // centers is less than a threshold, or if we have reached a number
+        // of iterations, stop iterating
+
+    } while (!converged);
     
 
 	return 0;
