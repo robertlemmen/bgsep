@@ -46,12 +46,13 @@ int main(int argc, char **argv) {
 
     cout << "cutting down to save time...." << endl;
     shuffle(bgpixels.begin(), bgpixels.end(), rng);
-    bgpixels.resize(200);
+    bgpixels.resize(2000);
 
     // k-means cluster them
     vector<Vec<float,3>> centers;
     vector<Mat> covariances;
     for (int n = 2; n < 3; ++n) {
+        cout << "k-means clustering for " << n << " clusters..." << endl;
         float prev_tsi = -1;
         vector<Vec<float,3>> prev_centers(n, {0, 0, 0});
         for (int reps = 0; reps < 1; reps++) {
@@ -122,6 +123,7 @@ int main(int argc, char **argv) {
             } while (!converged);
 
             // compute the silhouette 
+            cout << "determining the silhouette..." << endl;
             vector<vector<Vec3b>> clusters(n);
             for (int j = 0; j < bgpixels.size(); ++j) {
                 Vec<float,3> pixel = bgpixels[j];
@@ -185,7 +187,7 @@ int main(int argc, char **argv) {
                 Mat covariance(3, 3, CV_32F, 0.0);
                 for (int a = 0; a < clusters[i].size(); ++a) {
                     Vec<float,3> pa = clusters[i][a];
-                    // this is a bit stupid as the covariance matrix is
+                    // XXX this is a bit stupid as the covariance matrix is
                     // symmetric, but hey, one thing at a time
                     for (int x = 0; x < 3; x++) {
                         for (int y = 0; y < 3; y++) {
@@ -245,7 +247,7 @@ int main(int argc, char **argv) {
     // so seeding is great
     int n = covariances.size();
     cout << "EM algorithm with " << n << " clusters" << endl;
-    bool converged = true;
+    bool converged = false;
     do {
         cout << "-------" << endl;
         for (int i = 0; i < n; ++i) {
@@ -287,11 +289,11 @@ int main(int argc, char **argv) {
             }
             for (int c = 0; c < n; ++c) {
                 weights[p][c] /= weightsum;
-                //cout << "pixel " << p << " at " << pixel << " attributed to center " << c << " at " << centers[c] << " with weight " << weights[p][c] << endl;
             }
         }
 
-        // compute the new mean
+        // compute the new means
+        vector<Vec<float,3>> new_centers(n);
         for (int c = 0; c < n; ++c) {
             Vec<float,3> new_center(0.0, 0.0, 0.0);
             double weightsum = 0.0;
@@ -302,15 +304,85 @@ int main(int argc, char **argv) {
                 weightsum += weights[p][c];
             }
             new_center /= weightsum;
-            cout << "new center " << c << ": " << new_center << endl;
+            new_centers[c] = new_center;
         }
-        // XXX and the new covariance
-        // XXX determine drift length of center, if the total drift of all
-        // centers is less than a threshold, or if we have reached a number
-        // of iterations, stop iterating
+
+        
+        // and the new covariance
+        vector<Mat> new_covariances = vector<Mat>(n);
+        for (int c = 0; c < n; ++c) {
+            Mat covariance(3, 3, CV_32F, 0.0);
+            double weightsum = 0.0;
+            for (int p = 0; p < bgpixels.size(); ++p) {
+                Vec<float,3> pixel = bgpixels[p];
+                // XXX this is a bit stupid as the covariance matrix is
+                // symmetric, but hey, one thing at a time
+                for (int x = 0; x < 3; x++) {
+                    for (int y = 0; y < 3; y++) {
+                        covariance.at<float>(y, x) += weights[p][c] * (pixel[y] - new_centers[c][y])*(pixel[x] - new_centers[c][x]);
+                    }
+                }
+                weightsum += weights[p][c];
+            }
+            for (int x = 0; x < 3; x++) {
+                for (int y = 0; y < 3; y++) {
+                    covariance.at<float>(y, x) /= weightsum;
+                }
+            }
+            new_covariances[c] = covariance;
+        }
+        // determine how much the centers have moved since the last iteration,
+        // if this is really small, then we have convergence
+        double drift = 0.0;
+        for (int c = 0; c < n; ++c) {
+            drift += norm(centers[c]-new_centers[c]);
+        }
+        drift /= n;
+        cout << "drift " << drift << endl;
+        if (drift < 0.1) { // totally arbitrary value, but conservative
+            converged = true;
+        }
+
+        covariances = new_covariances;
+        centers = new_centers;
 
     } while (!converged);
     
+
+    // now read the actual image and for each pixel determine whether it is more
+    // likely to be forground or background
+
+    image = imread("coos.png", CV_LOAD_IMAGE_COLOR);
+	if (!image.data) {
+		cerr << "could not load image" << endl;
+		return 1;
+	}	
+	cout << "Read image " << image.cols << "x" << image.rows << " pixels" << endl;
+    Vec3b white{255,255,255};
+    for (int x = 0; x < image.cols; ++x) {
+        for (int y = 0; y < image.rows; ++y) {
+            Vec3b color = image.at<Vec3b>(y, x);
+            double bg_prop = 0.0;
+            for (int c = 0; c < n; ++c) {
+                Vec<float,3> center = centers[c];
+                Mat covariance = covariances[c];
+                Mat a =   (matFromVec(color) - matFromVec(center)).t() 
+                                        * covariance.inv() 
+                                        * (matFromVec(color) - matFromVec(center));
+                double aa = a.at<float>(0,0);
+                double af = exp(-.5 * aa);
+                double bf =  sqrt( pow(2 * M_PI, 3.0) * determinant(covariance) );
+                bg_prop += af / bf;
+            }
+            // XXX this should b 1 if summed over all colors? is it? 
+            double fg_prop = 1.0 / 255.0 / 255.0 / 255.0;
+            if (fg_prop < bg_prop) {
+                image.at<Vec3b>(y, x) = white;
+            }
+        }
+    }
+    // save to chck it out
+    imwrite("coos-gmm.png", image);
 
 	return 0;
 }
