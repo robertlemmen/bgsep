@@ -51,7 +51,7 @@ int main(int argc, char **argv) {
     // k-means cluster them
     vector<Vec<float,3>> centers;
     vector<Mat> covariances;
-    for (int n = 2; n < 3; ++n) {
+    for (int n = 3; n < 4; ++n) {
         cout << "k-means clustering for " << n << " clusters..." << endl;
         float prev_tsi = -1;
         vector<Vec<float,3>> prev_centers(n, {0, 0, 0});
@@ -246,6 +246,7 @@ int main(int argc, char **argv) {
     // hard to get a full covariance matrix with few samples (too many factors)
     // so seeding is great
     int n = covariances.size();
+    vector<double> cluster_priors(3, 1.0);
     cout << "EM algorithm with " << n << " clusters" << endl;
     bool converged = false;
     do {
@@ -267,6 +268,7 @@ int main(int argc, char **argv) {
                 cout << "]";
             }
             cout << "]" << endl;
+            cout << "prior prob for cluster " << i << " is " << cluster_priors[i] << endl;
         }
 
         // determine the relative probabilities for each pixel and cluster
@@ -284,7 +286,7 @@ int main(int argc, char **argv) {
                 double aa = a.at<float>(0,0);
                 double af = exp(-.5 * aa);
                 double bf =  sqrt( pow(2 * M_PI, 3.0) * determinant(covariance) );
-                weights[p][c] = af / bf;
+                weights[p][c] = af / bf * cluster_priors[c];
                 weightsum += weights[p][c];
             }
             for (int c = 0; c < n; ++c) {
@@ -305,6 +307,7 @@ int main(int argc, char **argv) {
             }
             new_center /= weightsum;
             new_centers[c] = new_center;
+            cluster_priors[c] = weightsum / bgpixels.size();
         }
 
         
@@ -359,6 +362,7 @@ int main(int argc, char **argv) {
 	}	
 	cout << "Read image " << image.cols << "x" << image.rows << " pixels" << endl;
     Vec3b white{255,255,255};
+    double max_bg_prop = 4e-5;
     for (int x = 0; x < image.cols; ++x) {
         for (int y = 0; y < image.rows; ++y) {
             Vec3b color = image.at<Vec3b>(y, x);
@@ -372,17 +376,58 @@ int main(int argc, char **argv) {
                 double aa = a.at<float>(0,0);
                 double af = exp(-.5 * aa);
                 double bf =  sqrt( pow(2 * M_PI, 3.0) * determinant(covariance) );
-                bg_prop += af / bf;
+                bg_prop += af / bf * cluster_priors[c];
             }
             // XXX this should b 1 if summed over all colors? is it? 
             double fg_prop = 1.0 / 255.0 / 255.0 / 255.0;
             if (fg_prop < bg_prop) {
                 image.at<Vec3b>(y, x) = white;
             }
+/*
+            int rel_prob = (int)(512.0 * bg_prop / fg_prop);
+            if (rel_prob > 255.0) {
+                rel_prob = 255.0;
+            }
+            cout << "rel prob " << rel_prob << endl;
+            Vec3b false_col{rel_prob, 255 - rel_prob, 255 - rel_prob};
+            image.at<Vec3b>(y, x) = false_col;*/
         }
     }
+ //  cout << "maximum background probability is " << max_bg_prop << endl;
     // save to chck it out
     imwrite("coos-gmm.png", image);
 
+
+    /*
+    // as an experiment, let's sum the probabilities over all possibel pixel
+    // values and see if that sums up to 1, independently from the number of
+    // clusters...
+    double sum = 0.0;
+    for (int x = 0; x < 256; ++x) {
+        for (int y = 0; y < 256; ++y) {
+            for (int z = 0; z < 256; ++z) {
+                Vec3b color{x,y,z};
+                double bg_prop = 0.0;
+                for (int c = 0; c < n; ++c) {
+                    Vec<float,3> center = centers[c];
+                    Mat covariance = covariances[c];
+                    Mat a =   (matFromVec(color) - matFromVec(center)).t() 
+                                            * covariance.inv() 
+                                            * (matFromVec(color) - matFromVec(center));
+                    double aa = a.at<float>(0,0);
+                    double af = exp(-.5 * aa);
+                    double bf =  sqrt( pow(2 * M_PI, 3.0) * determinant(covariance) );
+                    bg_prop += af / bf;
+                }
+                sum += bg_prop;
+            }
+        }
+    }
+    cout << "sum over all color values is " << sum << " with " << n << " gaussians" << endl;
+    // XXX -> so it looks like this is not normalised, which does not make much
+    // sense. we should noramlise it, but could that not lead to instabilites
+    // during converging it? perhaps we should not take this factor into account
+    // when converging, or perhaps not initially?
+*/
 	return 0;
 }
